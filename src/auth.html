@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Flash Desktop — Sign In</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    body { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: calc(100vh - 48px); text-align: center; }
+    .auth-card { max-width: 320px; width: 100%; }
+    .auth-card input { text-align: center; }
+    .step { display: none; }
+    .step.active { display: block; }
+  </style>
+</head>
+<body>
+  <div class="auth-card">
+    <div class="flash-logo">Flash Desktop</div>
+    <p class="subtitle">Connect to your Flash account</p>
+
+    <div id="step1" class="step active">
+      <div class="card">
+        <label for="authUrl">Server URL</label>
+        <input type="text" id="authUrl" value="https://useflash.com" placeholder="https://useflash.com">
+        <button class="btn btn-primary" style="width:100%" onclick="startAuth()">Sign In with Flash</button>
+      </div>
+    </div>
+
+    <div id="step2" class="step">
+      <div class="card">
+        <p style="font-size:14px; color:var(--text-secondary); margin-bottom:16px;">
+          Complete sign-in in your browser, then paste the token here:
+        </p>
+        <label for="tokenInput">Device Token</label>
+        <input type="text" id="tokenInput" placeholder="Paste token from browser...">
+        <button class="btn btn-primary" style="width:100%" onclick="completeAuth()">Connect</button>
+        <button class="btn btn-secondary" style="width:100%; margin-top:8px" onclick="backToStep1()">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const { invoke } = window.__TAURI__.core;
+
+    async function startAuth() {
+      const serverUrl = document.getElementById('authUrl').value.replace(/\/+$/, '');
+      const hostname = await invoke('get_hostname');
+
+      // Open browser to device auth page
+      const authUrl = `${serverUrl}/settings/devices?register=true&hostname=${encodeURIComponent(hostname)}`;
+      window.__TAURI__.shell.open(authUrl);
+
+      document.getElementById('step1').classList.remove('active');
+      document.getElementById('step2').classList.add('active');
+    }
+
+    async function completeAuth() {
+      const token = document.getElementById('tokenInput').value.trim();
+      if (!token) return;
+
+      try {
+        await invoke('store_token', { token });
+
+        // Save config with server URL
+        const serverUrl = document.getElementById('authUrl').value.replace(/\/+$/, '');
+        const hostname = await invoke('get_hostname');
+        const config = {
+          server_url: serverUrl,
+          device_name: hostname,
+          server_id: null, // Will be set by the server during registration
+        };
+        await invoke('save_config', { config });
+
+        // Go to main settings
+        window.location.href = 'index.html';
+      } catch (e) {
+        alert('Failed to save token: ' + e);
+      }
+    }
+
+    function backToStep1() {
+      document.getElementById('step2').classList.remove('active');
+      document.getElementById('step1').classList.add('active');
+    }
+  </script>
+</body>
+</html>

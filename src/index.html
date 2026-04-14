@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Flash Desktop</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="flash-logo">Flash Desktop</div>
+  <p class="subtitle">Connected to your Flash workspace</p>
+
+  <div class="card">
+    <div class="status-row">
+      <div class="status-dot connected" id="statusDot"></div>
+      <div>
+        <div class="status-text" id="statusText">Connected</div>
+        <div class="status-detail" id="statusDetail">useflash.com</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <label for="deviceName">Device Name</label>
+    <input type="text" id="deviceName" placeholder="My Computer">
+
+    <label for="serverUrl">Server URL</label>
+    <input type="text" id="serverUrl" placeholder="https://useflash.com">
+
+    <div class="btn-row">
+      <button class="btn btn-primary" id="saveBtn" onclick="saveConfig()">Save</button>
+    </div>
+  </div>
+
+  <div class="separator"></div>
+
+  <div class="btn-row">
+    <button class="btn btn-danger" onclick="logout()">Sign Out</button>
+  </div>
+
+  <script>
+    const { invoke } = window.__TAURI__.core;
+
+    async function loadConfig() {
+      try {
+        const config = await invoke('get_config');
+        document.getElementById('deviceName').value = config.device_name || '';
+        document.getElementById('serverUrl').value = config.server_url || '';
+        document.getElementById('statusDetail').textContent = config.server_url || 'Not configured';
+      } catch (e) {
+        console.error('Failed to load config:', e);
+      }
+    }
+
+    async function saveConfig() {
+      const config = {
+        server_url: document.getElementById('serverUrl').value,
+        device_name: document.getElementById('deviceName').value,
+        server_id: null, // preserved from existing config
+      };
+      try {
+        // Load existing to preserve server_id
+        const existing = await invoke('get_config');
+        config.server_id = existing.server_id;
+        await invoke('save_config', { config });
+        document.getElementById('saveBtn').textContent = 'Saved!';
+        setTimeout(() => { document.getElementById('saveBtn').textContent = 'Save'; }, 1500);
+      } catch (e) {
+        console.error('Failed to save config:', e);
+      }
+    }
+
+    async function logout() {
+      if (confirm('Sign out of Flash Desktop? You will need to re-authenticate.')) {
+        try {
+          await invoke('logout');
+          window.location.href = 'auth.html';
+        } catch (e) {
+          console.error('Failed to logout:', e);
+        }
+      }
+    }
+
+    // Check auth on load
+    async function init() {
+      const authed = await invoke('is_authenticated');
+      if (!authed) {
+        window.location.href = 'auth.html';
+        return;
+      }
+      loadConfig();
+    }
+
+    init();
+  </script>
+</body>
+</html>
