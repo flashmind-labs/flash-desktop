@@ -11,17 +11,22 @@
     "trayIcon": {
       "id": "flash-tray",
       "iconPath": "icons/icon.png",
-      "tooltip": "Flash Desktop"
+      "tooltip": "Flash Desktop",
+      "iconAsTemplate": true
     },
     "windows": [
       {
-        "label": "settings",
-        "title": "Flash Desktop",
-        "width": 420,
-        "height": 520,
-        "resizable": false,
-        "visible": false,
-        "center": true
+        "label": "main",
+        "title": "Flash",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 720,
+        "minHeight": 480,
+        "visible": true,
+        "center": true,
+        "url": "index.html",
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       }
     ]
   },
