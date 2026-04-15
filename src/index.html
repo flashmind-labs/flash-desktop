@@ -12,18 +12,27 @@
       margin: 0;
       padding: 0;
       overflow: hidden;
-      background: var(--bg-chat);
+      /* Outer chrome — matches the web app's dark sidebar */
+      background: var(--bg-dark, #2e2c29);
     }
 
+    /* Inner light card — wraps the loader/offline content with rounded
+       corners and a small gap of dark chrome around it, exactly like the
+       main chat area of useflash.com (m-[6px], rounded-2xl, bg-flash-chat). */
     .splash {
       position: fixed;
-      inset: 0;
+      top: 5px;
+      right: 5px;
+      bottom: 5px;
+      left: 5px;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       gap: 16px;
       background: var(--bg-chat);
+      border-radius: 16px;
+      box-shadow: 0 0 24px rgba(0, 0, 0, 0.18);
       z-index: 10;
       transition: opacity 0.3s ease;
     }
