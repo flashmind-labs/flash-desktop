@@ -36,12 +36,21 @@ fn set_chrome_visible(app: &tauri::AppHandle, visible: bool) {
 
 #[tauri::command]
 fn get_config() -> Config {
-    Config::load()
+    let mut cfg = Config::load();
+    // Don't expose the access token to the webview
+    cfg.access_token = None;
+    cfg
 }
 
 #[tauri::command]
 fn save_config(config: Config) -> Result<(), String> {
-    config.save()
+    // Preserve the existing access token — never let the webview overwrite it
+    let existing = Config::load();
+    let merged = Config {
+        access_token: existing.access_token,
+        ..config
+    };
+    merged.save()
 }
 
 #[tauri::command]

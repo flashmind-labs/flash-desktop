@@ -1,21 +1,23 @@
-use keyring::Entry;
+// Token storage. Currently file-backed via Config (config.json with mode 0600).
+// macOS keychain ACLs cause read failures for background-thread access in
+// unsigned dev builds, so we use the config file for now.
 
-const SERVICE: &str = "flash-desktop";
-const USERNAME: &str = "oauth-token";
+use crate::config::Config;
 
 pub fn store_token(token: &str) -> Result<(), String> {
-    let entry = Entry::new(SERVICE, USERNAME).map_err(|e| e.to_string())?;
-    entry.set_password(token).map_err(|e| e.to_string())
+    let mut cfg = Config::load();
+    cfg.access_token = Some(token.to_string());
+    cfg.save()
 }
 
 pub fn get_token() -> Option<String> {
-    let entry = Entry::new(SERVICE, USERNAME).ok()?;
-    entry.get_password().ok()
+    Config::load().access_token
 }
 
 pub fn delete_token() -> Result<(), String> {
-    let entry = Entry::new(SERVICE, USERNAME).map_err(|e| e.to_string())?;
-    entry.delete_credential().map_err(|e| e.to_string())
+    let mut cfg = Config::load();
+    cfg.access_token = None;
+    cfg.save()
 }
 
 pub fn is_authenticated() -> bool {
