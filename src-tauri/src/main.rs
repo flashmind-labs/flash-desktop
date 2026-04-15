@@ -10,6 +10,7 @@ use config::Config;
 use mcp::ToolRegistry;
 use std::sync::Arc;
 use tauri::{Emitter, Manager, WindowEvent};
+use tauri_plugin_autostart::{ManagerExt, MacosLauncher};
 
 #[tauri::command]
 fn get_config() -> Config {
@@ -50,9 +51,6 @@ fn get_server_url() -> String {
 
 /// Register this machine as a Flash Desktop device.
 /// Called from the web UI (useflash.com) once the user confirms.
-/// - Persists OAuth access token to the OS keychain
-/// - Persists the server_id + device name to the on-disk config
-/// - The WebSocket reconnect loop picks up the new credentials and connects.
 #[tauri::command]
 fn register_device(
     access_token: String,
@@ -76,8 +74,99 @@ fn show_main_window(app: tauri::AppHandle) {
     }
 }
 
+#[tauri::command]
+fn get_autostart(app: tauri::AppHandle) -> bool {
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+#[tauri::command]
+fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let manager = app.autolaunch();
+    if enabled {
+        manager.enable().map_err(|e| e.to_string())
+    } else {
+        manager.disable().map_err(|e| e.to_string())
+    }
+}
+
+/// Injected into every page loaded in the main webview.
+///
+/// - Adds an invisible ~28px drag region at the very top of the window so the
+///   frameless window stays draggable (data-tauri-drag-region).
+/// - Adds top padding to `body` so content doesn't render under the macOS
+///   traffic lights.
+/// - Robust to client-side navigation: uses a MutationObserver so SPAs
+///   (like Flash itself) don't wipe out the bar on route changes.
+const FRAMELESS_CHROME_JS: &str = r#"
+(function() {
+  if (window.__flashDesktopChromeInstalled) return;
+  window.__flashDesktopChromeInstalled = true;
+
+  const BAR_HEIGHT = 28;
+
+  function ensureBar() {
+    if (document.getElementById('__flash-drag-region')) return;
+    if (!document.body) return;
+    const bar = document.createElement('div');
+    bar.id = '__flash-drag-region';
+    bar.setAttribute('data-tauri-drag-region', '');
+    bar.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: ${BAR_HEIGHT}px;
+      background: transparent;
+      z-index: 2147483647;
+      -webkit-app-region: drag;
+      app-region: drag;
+      pointer-events: auto;
+    `;
+    // Double-click the drag region to toggle maximize (standard macOS behavior)
+    bar.addEventListener('dblclick', () => {
+      try {
+        const win = window.__TAURI__?.window?.getCurrentWindow?.();
+        if (win) win.toggleMaximize?.();
+      } catch (e) { /* ignore */ }
+    });
+    document.body.appendChild(bar);
+  }
+
+  function ensurePadding() {
+    if (!document.body) return;
+    // Reserve space for traffic lights. Only push if the page hasn't already
+    // reserved space (useflash.com's own layout may already leave room).
+    const existing = parseInt(document.body.style.paddingTop || '0', 10);
+    if (existing < BAR_HEIGHT) {
+      document.body.style.paddingTop = `${BAR_HEIGHT}px`;
+    }
+  }
+
+  function install() {
+    ensureBar();
+    ensurePadding();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', install);
+  } else {
+    install();
+  }
+
+  // Re-install if the SPA wipes out our bar during route changes
+  const obs = new MutationObserver(() => install());
+  const start = () => obs.observe(document.documentElement, { childList: true, subtree: true });
+  if (document.documentElement) start();
+  else document.addEventListener('DOMContentLoaded', start);
+})();
+"#;
+
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            Some(vec![]), // no extra args
+        ))
         .invoke_handler(tauri::generate_handler![
             get_config,
             save_config,
@@ -87,7 +176,9 @@ fn main() {
             get_hostname,
             get_server_url,
             register_device,
-            show_main_window
+            show_main_window,
+            get_autostart,
+            set_autostart
         ])
         .on_window_event(|window, event| {
             // Close button hides the window instead of quitting the app
@@ -100,20 +191,74 @@ fn main() {
             }
         })
         .setup(|app| {
-            // Build tray menu
+            // Build the main window programmatically so we can inject the
+            // drag region script on every navigation (tauri.conf.json windows
+            // don't support initialization_script).
+            let _main_window = tauri::WebviewWindowBuilder::new(
+                app,
+                "main",
+                tauri::WebviewUrl::App("index.html".into()),
+            )
+            .title("Flash")
+            .inner_size(1200.0, 800.0)
+            .min_inner_size(720.0, 480.0)
+            .center()
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .initialization_script(FRAMELESS_CHROME_JS)
+            .build()?;
+
+            // Build tray menu with autostart toggle + current state
+            let autostart_enabled = app.autolaunch().is_enabled().unwrap_or(false);
+            let autostart_label = if autostart_enabled {
+                "Start at Login ✓"
+            } else {
+                "Start at Login"
+            };
+
             let open_i = tauri::menu::MenuItem::with_id(app, "open", "Open Flash", true, None::<&str>)?;
+            let autostart_i = tauri::menu::MenuItem::with_id(app, "autostart", autostart_label, true, None::<&str>)?;
+            let sep_i = tauri::menu::PredefinedMenuItem::separator(app)?;
             let quit_i = tauri::menu::MenuItem::with_id(app, "quit", "Quit Flash Desktop", true, None::<&str>)?;
-            let menu = tauri::menu::Menu::with_items(app, &[&open_i, &quit_i])?;
+            let menu = tauri::menu::Menu::with_items(app, &[&open_i, &sep_i, &autostart_i, &sep_i, &quit_i])?;
 
             let _tray = tauri::tray::TrayIconBuilder::with_id("flash-tray")
                 .tooltip("Flash Desktop — Starting...")
                 .menu(&menu)
-                .on_menu_event(|app, event| match event.id().as_ref() {
+                .on_menu_event(move |app, event| match event.id().as_ref() {
                     "open" => {
                         if let Some(window) = app.get_webview_window("main") {
                             window.show().ok();
                             window.unminimize().ok();
                             window.set_focus().ok();
+                        }
+                    }
+                    "autostart" => {
+                        let manager = app.autolaunch();
+                        let currently_enabled = manager.is_enabled().unwrap_or(false);
+                        let result = if currently_enabled {
+                            manager.disable()
+                        } else {
+                            manager.enable()
+                        };
+                        if result.is_ok() {
+                            let new_label = if !currently_enabled {
+                                "Start at Login ✓"
+                            } else {
+                                "Start at Login"
+                            };
+                            // Update menu item label
+                            if let Some(tray) = app.tray_by_id("flash-tray") {
+                                // Rebuild menu with updated label
+                                let open_i = tauri::menu::MenuItem::with_id(app, "open", "Open Flash", true, None::<&str>).ok();
+                                let autostart_i = tauri::menu::MenuItem::with_id(app, "autostart", new_label, true, None::<&str>).ok();
+                                let sep_i = tauri::menu::PredefinedMenuItem::separator(app).ok();
+                                let quit_i = tauri::menu::MenuItem::with_id(app, "quit", "Quit Flash Desktop", true, None::<&str>).ok();
+                                if let (Some(o), Some(a), Some(s), Some(q)) = (open_i, autostart_i, sep_i, quit_i) {
+                                    if let Ok(new_menu) = tauri::menu::Menu::with_items(app, &[&o, &s, &a, &s, &q]) {
+                                        tray.set_menu(Some(new_menu)).ok();
+                                    }
+                                }
+                            }
                         }
                     }
                     "quit" => {
@@ -131,7 +276,6 @@ fn main() {
                     {
                         let app = tray.app_handle();
                         if let Some(window) = app.get_webview_window("main") {
-                            // Toggle: hide if already visible, show otherwise
                             match window.is_visible() {
                                 Ok(true) => { window.hide().ok(); }
                                 _ => {
@@ -148,7 +292,6 @@ fn main() {
             // Start WebSocket connection in background
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                // Wait a moment for the app to fully initialize
                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
                 let mut registry = ToolRegistry::new();
@@ -175,7 +318,6 @@ fn main() {
                         if let Some(tray) = handle.tray_by_id("flash-tray") {
                             tray.set_tooltip(Some(tooltip)).ok();
                         }
-                        // Notify the webview so the UI can react (e.g. online badge)
                         let _ = handle.emit("flash:status", tooltip);
                     })
                 };

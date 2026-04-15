@@ -14,21 +14,7 @@
       "tooltip": "Flash Desktop",
       "iconAsTemplate": true
     },
-    "windows": [
-      {
-        "label": "main",
-        "title": "Flash",
-        "width": 1200,
-        "height": 800,
-        "minWidth": 720,
-        "minHeight": 480,
-        "visible": true,
-        "center": true,
-        "url": "index.html",
-        "titleBarStyle": "Overlay",
-        "hiddenTitle": true
-      }
-    ]
+    "windows": []
   },
   "bundle": {
     "active": true,
