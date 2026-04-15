@@ -70,20 +70,30 @@ impl WsClient {
         let sender_holder = self.sender.clone();
         let mut retries = 0u32;
 
+        let mut warned_no_creds = false;
         loop {
             let config = Config::load();
             // Wait for credentials instead of returning — the user may
             // register the device after the app has already started, in which
             // case we need to pick up the newly stored token + server_id.
             let (token, server_id) = match (auth::get_token(), config.server_id.clone()) {
-                (Some(t), Some(s)) => (t, s),
+                (Some(t), Some(s)) => {
+                    if warned_no_creds {
+                        eprintln!("[flash-desktop] credentials found, attempting connect…");
+                        warned_no_creds = false;
+                    }
+                    (t, s)
+                }
                 _ => {
+                    if !warned_no_creds {
+                        eprintln!("[flash-desktop] no credentials yet — waiting for device registration");
+                        warned_no_creds = true;
+                    }
                     let prev = status.lock().await.clone();
                     if prev != ConnectionStatus::AuthError {
                         *status.lock().await = ConnectionStatus::AuthError;
                         on_status(ConnectionStatus::AuthError);
                     }
-                    // Slow poll — once registered, we'll see credentials on the next tick
                     sleep(Duration::from_secs(2)).await;
                     continue;
                 }
@@ -97,8 +107,11 @@ impl WsClient {
                 server_id,
             );
 
+            eprintln!("[flash-desktop] connecting to {}", ws_url.replace(&token, "***TOKEN***"));
+
             match connect_async(&ws_url).await {
                 Ok((ws_stream, _)) => {
+                    eprintln!("[flash-desktop] connected ✓");
                     retries = 0;
                     *status.lock().await = ConnectionStatus::Connected;
                     on_status(ConnectionStatus::Connected);
@@ -157,11 +170,12 @@ impl WsClient {
                         }
                     }
 
+                    eprintln!("[flash-desktop] WebSocket closed by remote — will reconnect");
                     write_task.abort();
                     *sender_holder.lock().await = None;
                 }
                 Err(e) => {
-                    eprintln!("WebSocket connection failed: {}", e);
+                    eprintln!("[flash-desktop] connection failed: {}", e);
                 }
             }
 
