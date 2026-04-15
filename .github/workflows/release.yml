@@ -142,31 +142,71 @@ jobs:
         id: artifact
         shell: bash
         run: |
-          if [[ "${{ matrix.bundle_ext }}" == "dmg" ]]; then
-            FILE=$(find src-tauri/target/${{ matrix.target }}/release/bundle/dmg -name "*.dmg" | head -1)
-          elif [[ "${{ matrix.bundle_ext }}" == "AppImage" ]]; then
-            FILE=$(find src-tauri/target/${{ matrix.target }}/release/bundle/appimage -name "*.AppImage" | head -1)
-          elif [[ "${{ matrix.bundle_ext }}" == "msi" ]]; then
-            FILE=$(find src-tauri/target/${{ matrix.target }}/release/bundle/msi -name "*.msi" | head -1)
+          set -euo pipefail
+          BUNDLE_DIR=""
+          case "${{ matrix.bundle_ext }}" in
+            dmg) BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle/dmg" ;;
+            AppImage) BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle/appimage" ;;
+            msi) BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle/msi" ;;
+          esac
+
+          echo "Scanning $BUNDLE_DIR for *.${{ matrix.bundle_ext }}"
+          if [ ! -d "$BUNDLE_DIR" ]; then
+            echo "::error::Bundle directory does not exist: $BUNDLE_DIR"
+            ls -la "src-tauri/target/${{ matrix.target }}/release/bundle/" 2>/dev/null || true
+            exit 1
           fi
+
+          FILE=$(find "$BUNDLE_DIR" -name "*.${{ matrix.bundle_ext }}" | head -1)
+          if [ -z "$FILE" ]; then
+            echo "::error::No *.${{ matrix.bundle_ext }} found under $BUNDLE_DIR"
+            ls -la "$BUNDLE_DIR"
+            exit 1
+          fi
+
+          echo "Found artifact: $FILE ($(du -h "$FILE" | cut -f1))"
           echo "file=$FILE" >> $GITHUB_OUTPUT
-          echo "Found artifact: $FILE"
 
       - name: Generate checksums
         shell: bash
         run: |
+          set -euo pipefail
           FILE="${{ steps.artifact.outputs.file }}"
-          if [ -n "$FILE" ] && [ -f "$FILE" ]; then
-            BASENAME=$(basename "$FILE")
-            cp "$FILE" "${{ matrix.name }}.${{ matrix.bundle_ext }}"
-            if command -v sha1sum &>/dev/null; then
-              sha1sum "${{ matrix.name }}.${{ matrix.bundle_ext }}" > "${{ matrix.name }}.${{ matrix.bundle_ext }}.sha1"
-            else
-              shasum -a 1 "${{ matrix.name }}.${{ matrix.bundle_ext }}" > "${{ matrix.name }}.${{ matrix.bundle_ext }}.sha1"
-            fi
-            SHA=$(cut -d' ' -f1 < "${{ matrix.name }}.${{ matrix.bundle_ext }}.sha1")
-            echo "{\"version\": \"${{ needs.create-release.outputs.tag }}\", \"sha1\": \"${SHA}\", \"platform\": \"${{ matrix.platform }}\", \"target\": \"${{ matrix.target }}\"}" > "${{ matrix.name }}.${{ matrix.bundle_ext }}.metadata.json"
+          OUT="${{ matrix.name }}.${{ matrix.bundle_ext }}"
+          cp "$FILE" "$OUT"
+          if command -v sha1sum &>/dev/null; then
+            sha1sum "$OUT" > "$OUT.sha1"
+          else
+            shasum -a 1 "$OUT" > "$OUT.sha1"
           fi
+          SHA=$(cut -d' ' -f1 < "$OUT.sha1")
+          printf '{"version":"%s","sha1":"%s","platform":"%s","target":"%s"}\n' \
+            "${{ needs.create-release.outputs.tag }}" \
+            "$SHA" \
+            "${{ matrix.platform }}" \
+            "${{ matrix.target }}" > "$OUT.metadata.json"
+          echo "✓ $OUT prepared (sha1: $SHA)"
+
+      - name: Install AWS CLI (macOS)
+        if: matrix.platform == 'macos-latest' && steps.artifact.outputs.file != ''
+        shell: bash
+        run: |
+          if ! command -v aws &>/dev/null; then
+            brew install awscli
+          fi
+          aws --version
+
+      - name: Install AWS CLI (Windows)
+        if: matrix.platform == 'windows-latest' && steps.artifact.outputs.file != ''
+        shell: pwsh
+        run: |
+          if (-not (Get-Command aws -ErrorAction SilentlyContinue)) {
+            Invoke-WebRequest -Uri "https://awscli.amazonaws.com/AWSCLIV2.msi" -OutFile "$env:TEMP\AWSCLIV2.msi"
+            Start-Process msiexec.exe -Wait -ArgumentList "/i $env:TEMP\AWSCLIV2.msi /quiet"
+            $env:Path += ";C:\Program Files\Amazon\AWSCLIV2"
+            "C:\Program Files\Amazon\AWSCLIV2" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
+          aws --version
 
       - name: Upload to R2
         if: steps.artifact.outputs.file != ''
@@ -176,21 +216,39 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_REGION: auto
         run: |
+          set -euo pipefail
           ENDPOINT="https://87090cc9af569b84e7b50a7898dc0581.r2.cloudflarestorage.com"
           TAG="${{ needs.create-release.outputs.tag }}"
           NAME="${{ matrix.name }}.${{ matrix.bundle_ext }}"
 
-          # Install AWS CLI if needed (macOS)
-          if ! command -v aws &>/dev/null; then
-            if [[ "${{ matrix.platform }}" == "macos-latest" ]]; then
-              brew install awscli
-            fi
+          # Verify auth + bucket access first so we fail fast with a clear error
+          echo "::group::Verifying R2 access"
+          if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY:-}" ]; then
+            echo "::error::R2 credentials are not configured (R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY secrets missing)"
+            exit 1
+          fi
+          aws s3 ls "s3://flash-cdn/" --endpoint-url "$ENDPOINT" >/dev/null
+          echo "::endgroup::"
+
+          if [ ! -f "$NAME" ]; then
+            echo "::error::Expected artifact '$NAME' not found in working directory"
+            ls -la
+            exit 1
           fi
 
-          # Upload versioned
+          echo "::group::Uploading $NAME ($(du -h "$NAME" | cut -f1)) to R2"
+          # Versioned copy (immutable history)
           aws s3 cp "$NAME" "s3://flash-cdn/desktop/releases/${NAME}.${TAG}" --endpoint-url "$ENDPOINT"
           aws s3 cp "${NAME}.metadata.json" "s3://flash-cdn/desktop/releases/${NAME}.${TAG}.metadata.json" --endpoint-url "$ENDPOINT"
-
-          # Upload as stable (latest)
+          # Stable (latest) — overwrites previous release
           aws s3 cp "$NAME" "s3://flash-cdn/desktop/releases/stable/${NAME}" --endpoint-url "$ENDPOINT"
           aws s3 cp "${NAME}.metadata.json" "s3://flash-cdn/desktop/releases/stable/${NAME}.metadata.json" --endpoint-url "$ENDPOINT"
+          echo "::endgroup::"
+
+          echo "::group::Verifying upload"
+          aws s3 ls "s3://flash-cdn/desktop/releases/stable/${NAME}" --endpoint-url "$ENDPOINT"
+          echo "::endgroup::"
+
+          echo "✓ Uploaded ${NAME} to:"
+          echo "  versioned: https://cdn.useflash.com/desktop/releases/${NAME}.${TAG}"
+          echo "  stable:    https://cdn.useflash.com/desktop/releases/stable/${NAME}"
