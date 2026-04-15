@@ -89,29 +89,6 @@ fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
     }
 }
 
-/// Injected into every page in the main webview to reserve space for the
-/// native transparent titlebar (so content doesn't render under the traffic
-/// lights). The titlebar is native on macOS — OS handles dragging — we just
-/// make sure the page leaves room at the top.
-const TITLEBAR_SPACING_JS: &str = r#"
-(function() {
-  if (window.__flashDesktopTitlebarInstalled) return;
-  window.__flashDesktopTitlebarInstalled = true;
-  const TITLEBAR_HEIGHT = 28;
-  function ensurePadding() {
-    if (!document.body) return;
-    const existing = parseInt(getComputedStyle(document.body).paddingTop || '0', 10);
-    if (existing < TITLEBAR_HEIGHT) {
-      document.body.style.paddingTop = `${TITLEBAR_HEIGHT}px`;
-    }
-  }
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', ensurePadding);
-  } else {
-    ensurePadding();
-  }
-})();
-"#;
 
 fn main() {
     tauri::Builder::default()
@@ -161,7 +138,6 @@ fn main() {
             .title_bar_style(tauri::TitleBarStyle::Transparent)
             .hidden_title(true)
             .background_color(tauri::webview::Color(0x2e, 0x2c, 0x29, 0xff))
-            .initialization_script(TITLEBAR_SPACING_JS)
             .build()?;
 
             // Build tray menu with autostart toggle + current state
