@@ -24,6 +24,80 @@ pub fn register(registry: &mut ToolRegistry) {
         })),
     );
 
+    // desktop.close_app — quit an application by name (graceful first, then force)
+    registry.register(
+        ToolDefinition {
+            name: "desktop.close_app".to_string(),
+            description: "Quit an application by name (graceful AppleScript on macOS, killall fallback)".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "app": { "type": "string", "description": "Application name (e.g. 'Zed', 'Safari')" }
+                },
+                "required": ["app"]
+            }),
+            safety: "write".to_string(),
+        },
+        Arc::new(|input| Box::pin(async move {
+            let app = input.get("app").and_then(|v| v.as_str()).ok_or("Missing app")?;
+            // Strip a trailing .app if the user provided a full bundle name
+            let app_name = app.trim_end_matches(".app");
+
+            #[cfg(target_os = "macos")]
+            {
+                // Graceful quit via AppleScript first
+                let script = format!(r#"tell application "{}" to quit"#, app_name);
+                let result = std::process::Command::new("osascript")
+                    .arg("-e")
+                    .arg(&script)
+                    .output();
+                if let Ok(out) = result {
+                    if out.status.success() {
+                        return Ok(format!("Quit '{}' (AppleScript)", app_name));
+                    }
+                }
+                // Fallback: killall
+                let killall = std::process::Command::new("killall")
+                    .arg(app_name)
+                    .output()
+                    .map_err(|e| format!("killall failed: {}", e))?;
+                if killall.status.success() {
+                    return Ok(format!("Killed '{}' (killall)", app_name));
+                }
+                return Err(format!(
+                    "Could not close '{}' — {}",
+                    app_name,
+                    String::from_utf8_lossy(&killall.stderr)
+                ));
+            }
+
+            #[cfg(target_os = "windows")]
+            {
+                let exe = if app_name.ends_with(".exe") { app_name.to_string() } else { format!("{}.exe", app_name) };
+                let out = std::process::Command::new("taskkill")
+                    .args(["/IM", &exe, "/F"])
+                    .output()
+                    .map_err(|e| format!("taskkill failed: {}", e))?;
+                if out.status.success() {
+                    return Ok(format!("Closed '{}'", app_name));
+                }
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+
+            #[cfg(all(unix, not(target_os = "macos")))]
+            {
+                let out = std::process::Command::new("pkill")
+                    .args(["-f", app_name])
+                    .output()
+                    .map_err(|e| format!("pkill failed: {}", e))?;
+                if out.status.success() {
+                    return Ok(format!("Closed '{}'", app_name));
+                }
+                return Err(String::from_utf8_lossy(&out.stderr).to_string());
+            }
+        })),
+    );
+
     // desktop.notify — show a system notification (stub; actual OS notification via Tauri plugin later)
     registry.register(
         ToolDefinition {
