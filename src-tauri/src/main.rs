@@ -79,11 +79,25 @@ fn register_device(
     server_id: String,
     device_name: String,
 ) -> Result<(), String> {
-    auth::store_token(&access_token)?;
+    eprintln!(
+        "[flash-desktop] register_device called: server_id={}, device_name={}, token_len={}",
+        server_id,
+        device_name,
+        access_token.len()
+    );
+    auth::store_token(&access_token).map_err(|e| {
+        eprintln!("[flash-desktop] store_token FAILED: {}", e);
+        e
+    })?;
+    eprintln!("[flash-desktop] token stored in keychain ✓");
     let mut cfg = Config::load();
     cfg.server_id = Some(server_id);
     cfg.device_name = device_name;
-    cfg.save()?;
+    cfg.save().map_err(|e| {
+        eprintln!("[flash-desktop] config save FAILED: {}", e);
+        e
+    })?;
+    eprintln!("[flash-desktop] config saved ✓");
     Ok(())
 }
 
