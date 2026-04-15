@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "trayIcon": {
       "id": "flash-tray",
-      "iconPath": "icons/icon.png",
+      "iconPath": "icons/tray-template.png",
       "tooltip": "Flash Desktop",
       "iconAsTemplate": true
     },
