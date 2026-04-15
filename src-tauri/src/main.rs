@@ -17,7 +17,9 @@ use tauri_plugin_autostart::{ManagerExt, MacosLauncher};
 /// Hide the app icon from the macOS Dock / Windows taskbar so when the
 /// window is closed only the menu-bar / system-tray icon remains.
 /// On macOS this is done via Activation Policy (LSUIElement equivalent).
-/// On Windows we set `skip_taskbar` per-window.
+/// On Windows we set `skip_taskbar` per-window. Linux has no analogue —
+/// the WM handles the taskbar entry from the window's own visibility.
+#[allow(unused_variables)]
 fn set_chrome_visible(app: &tauri::AppHandle, visible: bool) {
     #[cfg(target_os = "macos")]
     {
@@ -170,7 +172,9 @@ fn main() {
             // Build the main window programmatically so we can inject the
             // drag region script on every navigation (tauri.conf.json windows
             // don't support initialization_script).
-            let _main_window = tauri::WebviewWindowBuilder::new(
+            // Build the main window. macOS-only options (title bar style,
+            // background color, hidden title) are gated below.
+            let mut builder = tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
                 tauri::WebviewUrl::App("index.html".into()),
@@ -178,14 +182,20 @@ fn main() {
             .title("Flash")
             .inner_size(1200.0, 800.0)
             .min_inner_size(720.0, 480.0)
-            .center()
-            // Transparent macOS titlebar — native drag, traffic lights visible,
-            // but the titlebar blends into the window background (which we set
-            // to Flash's dark sidebar chrome color so the top strip is themed).
-            .title_bar_style(tauri::TitleBarStyle::Transparent)
-            .hidden_title(true)
-            .background_color(tauri::webview::Color(0x2e, 0x2c, 0x29, 0xff))
-            .build()?;
+            .center();
+
+            #[cfg(target_os = "macos")]
+            {
+                // Transparent macOS titlebar — native drag, traffic lights visible,
+                // but the titlebar blends into the window background (which we set
+                // to Flash's dark sidebar chrome color so the top strip is themed).
+                builder = builder
+                    .title_bar_style(tauri::TitleBarStyle::Transparent)
+                    .hidden_title(true)
+                    .background_color(tauri::webview::Color(0x2e, 0x2c, 0x29, 0xff));
+            }
+
+            let _main_window = builder.build()?;
 
             // Build tray menu — autostart toggle lives in the web Settings →
             // Devices page now (uses get_autostart / set_autostart IPC).
