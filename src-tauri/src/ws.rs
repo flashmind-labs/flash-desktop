@@ -70,25 +70,29 @@ impl WsClient {
         let sender_holder = self.sender.clone();
         let mut retries = 0u32;
 
-        let mut warned_no_creds = false;
+        let mut tick = 0u32;
         loop {
+            tick += 1;
             let config = Config::load();
+            let token_opt = auth::get_token();
+            // Heartbeat every 5 ticks so we can verify the loop is alive
+            if tick % 5 == 1 {
+                eprintln!(
+                    "[flash-desktop] poll tick={} server_id={:?} token={}",
+                    tick,
+                    config.server_id,
+                    if token_opt.is_some() { "present" } else { "missing" }
+                );
+            }
+
             // Wait for credentials instead of returning — the user may
-            // register the device after the app has already started, in which
-            // case we need to pick up the newly stored token + server_id.
-            let (token, server_id) = match (auth::get_token(), config.server_id.clone()) {
+            // register the device after the app has already started.
+            let (token, server_id) = match (token_opt, config.server_id.clone()) {
                 (Some(t), Some(s)) => {
-                    if warned_no_creds {
-                        eprintln!("[flash-desktop] credentials found, attempting connect…");
-                        warned_no_creds = false;
-                    }
+                    eprintln!("[flash-desktop] credentials found at tick {}, attempting connect…", tick);
                     (t, s)
                 }
                 _ => {
-                    if !warned_no_creds {
-                        eprintln!("[flash-desktop] no credentials yet — waiting for device registration");
-                        warned_no_creds = true;
-                    }
                     let prev = status.lock().await.clone();
                     if prev != ConnectionStatus::AuthError {
                         *status.lock().await = ConnectionStatus::AuthError;

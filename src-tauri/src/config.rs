@@ -34,15 +34,26 @@ impl Config {
 
     pub fn load() -> Self {
         let path = Self::config_path();
-        fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        let raw = match fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[config] read failed at {:?}: {}", path, e);
+                return Self::default();
+            }
+        };
+        match serde_json::from_str::<Self>(&raw) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[config] parse failed: {} (raw: {})", e, raw);
+                Self::default()
+            }
+        }
     }
 
     pub fn save(&self) -> Result<(), String> {
         let path = Self::config_path();
         let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        fs::write(path, json).map_err(|e| e.to_string())
+        eprintln!("[config] saving to {:?}", path);
+        fs::write(&path, json).map_err(|e| e.to_string())
     }
 }
