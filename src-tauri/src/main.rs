@@ -140,19 +140,12 @@ fn main() {
             .background_color(tauri::webview::Color(0x2e, 0x2c, 0x29, 0xff))
             .build()?;
 
-            // Build tray menu with autostart toggle + current state
-            let autostart_enabled = app.autolaunch().is_enabled().unwrap_or(false);
-            let autostart_label = if autostart_enabled {
-                "Start at Login ✓"
-            } else {
-                "Start at Login"
-            };
-
+            // Build tray menu — autostart toggle lives in the web Settings →
+            // Devices page now (uses get_autostart / set_autostart IPC).
             let open_i = tauri::menu::MenuItem::with_id(app, "open", "Open Flash", true, None::<&str>)?;
-            let autostart_i = tauri::menu::MenuItem::with_id(app, "autostart", autostart_label, true, None::<&str>)?;
             let sep_i = tauri::menu::PredefinedMenuItem::separator(app)?;
             let quit_i = tauri::menu::MenuItem::with_id(app, "quit", "Quit Flash Desktop", true, None::<&str>)?;
-            let menu = tauri::menu::Menu::with_items(app, &[&open_i, &sep_i, &autostart_i, &sep_i, &quit_i])?;
+            let menu = tauri::menu::Menu::with_items(app, &[&open_i, &sep_i, &quit_i])?;
 
             let _tray = tauri::tray::TrayIconBuilder::with_id("flash-tray")
                 .tooltip("Flash Desktop — Starting...")
@@ -163,35 +156,6 @@ fn main() {
                             window.show().ok();
                             window.unminimize().ok();
                             window.set_focus().ok();
-                        }
-                    }
-                    "autostart" => {
-                        let manager = app.autolaunch();
-                        let currently_enabled = manager.is_enabled().unwrap_or(false);
-                        let result = if currently_enabled {
-                            manager.disable()
-                        } else {
-                            manager.enable()
-                        };
-                        if result.is_ok() {
-                            let new_label = if !currently_enabled {
-                                "Start at Login ✓"
-                            } else {
-                                "Start at Login"
-                            };
-                            // Update menu item label
-                            if let Some(tray) = app.tray_by_id("flash-tray") {
-                                // Rebuild menu with updated label
-                                let open_i = tauri::menu::MenuItem::with_id(app, "open", "Open Flash", true, None::<&str>).ok();
-                                let autostart_i = tauri::menu::MenuItem::with_id(app, "autostart", new_label, true, None::<&str>).ok();
-                                let sep_i = tauri::menu::PredefinedMenuItem::separator(app).ok();
-                                let quit_i = tauri::menu::MenuItem::with_id(app, "quit", "Quit Flash Desktop", true, None::<&str>).ok();
-                                if let (Some(o), Some(a), Some(s), Some(q)) = (open_i, autostart_i, sep_i, quit_i) {
-                                    if let Ok(new_menu) = tauri::menu::Menu::with_items(app, &[&o, &s, &a, &s, &q]) {
-                                        tray.set_menu(Some(new_menu)).ok();
-                                    }
-                                }
-                            }
                         }
                     }
                     "quit" => {
