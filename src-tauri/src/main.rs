@@ -206,6 +206,10 @@ fn main() {
 
             let _tray = tauri::tray::TrayIconBuilder::with_id("flash-tray")
                 .tooltip("Flash Desktop — Starting...")
+                // Explicitly mark the icon as a macOS template image — the
+                // config-side iconAsTemplate flag is unreliable on some
+                // Tauri 2 versions.
+                .icon_as_template(true)
                 .menu(&menu)
                 .on_menu_event(move |app, event| match event.id().as_ref() {
                     "open" => {
