@@ -72,21 +72,20 @@ impl WsClient {
 
         loop {
             let config = Config::load();
-            let token = match auth::get_token() {
-                Some(t) => t,
-                None => {
-                    *status.lock().await = ConnectionStatus::AuthError;
-                    on_status(ConnectionStatus::AuthError);
-                    return;
-                }
-            };
-
-            let server_id = match &config.server_id {
-                Some(id) => id.clone(),
-                None => {
-                    *status.lock().await = ConnectionStatus::AuthError;
-                    on_status(ConnectionStatus::AuthError);
-                    return;
+            // Wait for credentials instead of returning — the user may
+            // register the device after the app has already started, in which
+            // case we need to pick up the newly stored token + server_id.
+            let (token, server_id) = match (auth::get_token(), config.server_id.clone()) {
+                (Some(t), Some(s)) => (t, s),
+                _ => {
+                    let prev = status.lock().await.clone();
+                    if prev != ConnectionStatus::AuthError {
+                        *status.lock().await = ConnectionStatus::AuthError;
+                        on_status(ConnectionStatus::AuthError);
+                    }
+                    // Slow poll — once registered, we'll see credentials on the next tick
+                    sleep(Duration::from_secs(2)).await;
+                    continue;
                 }
             };
 
