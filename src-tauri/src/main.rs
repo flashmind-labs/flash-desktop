@@ -10,7 +10,29 @@ use config::Config;
 use mcp::ToolRegistry;
 use std::sync::Arc;
 use tauri::{Emitter, Manager, WindowEvent};
+#[cfg(target_os = "macos")]
+use tauri::ActivationPolicy;
 use tauri_plugin_autostart::{ManagerExt, MacosLauncher};
+
+/// Hide the app icon from the macOS Dock / Windows taskbar so when the
+/// window is closed only the menu-bar / system-tray icon remains.
+/// On macOS this is done via Activation Policy (LSUIElement equivalent).
+/// On Windows we set `skip_taskbar` per-window.
+fn set_chrome_visible(app: &tauri::AppHandle, visible: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        // Regular = shows in Dock + Cmd-Tab. Accessory = tray-only (no Dock).
+        let policy = if visible { ActivationPolicy::Regular } else { ActivationPolicy::Accessory };
+        let _ = app.set_activation_policy(policy);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(window) = app.get_webview_window("main") {
+            // skip_taskbar(true) hides from the Windows taskbar.
+            let _ = window.set_skip_taskbar(!visible);
+        }
+    }
+}
 
 #[tauri::command]
 fn get_config() -> Config {
@@ -68,6 +90,7 @@ fn register_device(
 #[tauri::command]
 fn show_main_window(app: tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
+        set_chrome_visible(&app, true);
         window.show().ok();
         window.unminimize().ok();
         window.set_focus().ok();
@@ -116,6 +139,7 @@ fn main() {
                 if window.label() == "main" {
                     api.prevent_close();
                     window.hide().ok();
+                    set_chrome_visible(&window.app_handle(), false);
                 }
             }
         })
@@ -153,6 +177,7 @@ fn main() {
                 .on_menu_event(move |app, event| match event.id().as_ref() {
                     "open" => {
                         if let Some(window) = app.get_webview_window("main") {
+                            set_chrome_visible(app, true);
                             window.show().ok();
                             window.unminimize().ok();
                             window.set_focus().ok();
@@ -174,8 +199,12 @@ fn main() {
                         let app = tray.app_handle();
                         if let Some(window) = app.get_webview_window("main") {
                             match window.is_visible() {
-                                Ok(true) => { window.hide().ok(); }
+                                Ok(true) => {
+                                    window.hide().ok();
+                                    set_chrome_visible(app, false);
+                                }
                                 _ => {
+                                    set_chrome_visible(app, true);
                                     window.show().ok();
                                     window.unminimize().ok();
                                     window.set_focus().ok();
