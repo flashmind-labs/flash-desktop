@@ -89,75 +89,27 @@ fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
     }
 }
 
-/// Injected into every page loaded in the main webview.
-///
-/// - Adds an invisible ~28px drag region at the very top of the window so the
-///   frameless window stays draggable (data-tauri-drag-region).
-/// - Adds top padding to `body` so content doesn't render under the macOS
-///   traffic lights.
-/// - Robust to client-side navigation: uses a MutationObserver so SPAs
-///   (like Flash itself) don't wipe out the bar on route changes.
-const FRAMELESS_CHROME_JS: &str = r#"
+/// Injected into every page in the main webview to reserve space for the
+/// native transparent titlebar (so content doesn't render under the traffic
+/// lights). The titlebar is native on macOS — OS handles dragging — we just
+/// make sure the page leaves room at the top.
+const TITLEBAR_SPACING_JS: &str = r#"
 (function() {
-  if (window.__flashDesktopChromeInstalled) return;
-  window.__flashDesktopChromeInstalled = true;
-
-  const BAR_HEIGHT = 28;
-
-  function ensureBar() {
-    if (document.getElementById('__flash-drag-region')) return;
-    if (!document.body) return;
-    const bar = document.createElement('div');
-    bar.id = '__flash-drag-region';
-    bar.setAttribute('data-tauri-drag-region', '');
-    bar.style.cssText = `
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: ${BAR_HEIGHT}px;
-      background: transparent;
-      z-index: 2147483647;
-      -webkit-app-region: drag;
-      app-region: drag;
-      pointer-events: auto;
-    `;
-    // Double-click the drag region to toggle maximize (standard macOS behavior)
-    bar.addEventListener('dblclick', () => {
-      try {
-        const win = window.__TAURI__?.window?.getCurrentWindow?.();
-        if (win) win.toggleMaximize?.();
-      } catch (e) { /* ignore */ }
-    });
-    document.body.appendChild(bar);
-  }
-
+  if (window.__flashDesktopTitlebarInstalled) return;
+  window.__flashDesktopTitlebarInstalled = true;
+  const TITLEBAR_HEIGHT = 28;
   function ensurePadding() {
     if (!document.body) return;
-    // Reserve space for traffic lights. Only push if the page hasn't already
-    // reserved space (useflash.com's own layout may already leave room).
-    const existing = parseInt(document.body.style.paddingTop || '0', 10);
-    if (existing < BAR_HEIGHT) {
-      document.body.style.paddingTop = `${BAR_HEIGHT}px`;
+    const existing = parseInt(getComputedStyle(document.body).paddingTop || '0', 10);
+    if (existing < TITLEBAR_HEIGHT) {
+      document.body.style.paddingTop = `${TITLEBAR_HEIGHT}px`;
     }
   }
-
-  function install() {
-    ensureBar();
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', ensurePadding);
+  } else {
     ensurePadding();
   }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', install);
-  } else {
-    install();
-  }
-
-  // Re-install if the SPA wipes out our bar during route changes
-  const obs = new MutationObserver(() => install());
-  const start = () => obs.observe(document.documentElement, { childList: true, subtree: true });
-  if (document.documentElement) start();
-  else document.addEventListener('DOMContentLoaded', start);
 })();
 "#;
 
@@ -203,8 +155,13 @@ fn main() {
             .inner_size(1200.0, 800.0)
             .min_inner_size(720.0, 480.0)
             .center()
-            .title_bar_style(tauri::TitleBarStyle::Overlay)
-            .initialization_script(FRAMELESS_CHROME_JS)
+            // Transparent macOS titlebar — native drag, traffic lights visible,
+            // but the titlebar blends into the window background (which we set
+            // to Flash's dark sidebar chrome color so the top strip is themed).
+            .title_bar_style(tauri::TitleBarStyle::Transparent)
+            .hidden_title(true)
+            .background_color(tauri::webview::Color(0x2e, 0x2c, 0x29, 0xff))
+            .initialization_script(TITLEBAR_SPACING_JS)
             .build()?;
 
             // Build tray menu with autostart toggle + current state
